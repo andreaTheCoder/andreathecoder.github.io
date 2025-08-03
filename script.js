@@ -100,7 +100,6 @@ document.getElementById('fileInput').addEventListener('change', e => {
           return best;
         }
 
-        // Correct chronological PB progression for singles
         function getSinglePBHistory(solves) {
           const sortedByDate = solves.slice().sort((a, b) => a.date - b.date);
           let currentPB = Infinity;
@@ -115,7 +114,6 @@ document.getElementById('fileInput').addEventListener('change', e => {
           return pbHistory.reverse();
         }
 
-        // Correct chronological PB progression for averages
         function getAveragePBHistory(solves, n) {
           if (solves.length < n) return [];
 
@@ -199,7 +197,6 @@ function renderTable() {
           <th style="width: 12%;">Ao12</th>
           <th style="width: 12%;">Ao50</th>
           <th style="width: 12%;">Ao100</th>
-          <th style="width: 5%;">Remove</th>
         </tr>
       </thead>
       <tbody>
@@ -221,20 +218,21 @@ function renderTable() {
     html += `<tr>
       <td class="text-start">${row.event}</td>
       ${cells}
-      <td><span class="remove-btn" data-index="${i}" title="Remove event">&times;</span></td>
     </tr>`;
   });
 
   html += '</tbody></table>';
   outputDiv.innerHTML = html;
 
-  // Add modal click handlers
   const modal = new bootstrap.Modal(document.getElementById('pbModal'));
   const modalBody = document.getElementById('pbModalBody');
   const modalTitle = document.getElementById('pbModalLabel');
 
+  // PB cell click handler — ignore Shift+Click
   document.querySelectorAll('.clickable-pb').forEach(cell => {
-    cell.addEventListener('click', () => {
+    cell.addEventListener('click', (e) => {
+      if (e.metaKey) return;
+
       const eventIndex = parseInt(cell.dataset.eventIndex, 10);
       const metric = cell.dataset.metric;
       const eventData = allEventData[eventIndex];
@@ -245,12 +243,10 @@ function renderTable() {
       if (!pbs.length) {
         modalBody.innerHTML = `<p>No past PBs found for ${metric.toUpperCase()}.</p>`;
       } else {
-        // Chronological PB progression (oldest first)
         const listItems = pbs.map(s => {
           if (metric === 'single') {
             return `<li>${formatTime(s.time)} <small class="text-muted">(${formatDate(s.date)})</small></li>`;
           } else {
-            // average entries have .avg and solves array
             return `<li>${formatTime(s.avg)} <small class="text-muted">(${formatDate(s.date)})</small></li>`;
           }
         }).join('');
@@ -263,13 +259,14 @@ function renderTable() {
     });
   });
 
-  // Remove event row handler
-  document.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      if (!isNaN(idx)) {
-        allEventData.splice(idx, 1);
+  // Command-click row to delete without opening modal
+  document.querySelectorAll('tbody tr').forEach((row, i) => {
+    row.addEventListener('click', (e) => {
+      if (e.metaKey) {
+        allEventData.splice(i, 1);
         renderTable();
+        e.stopPropagation();
+        e.preventDefault();
       }
     });
   });
