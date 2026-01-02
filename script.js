@@ -3,6 +3,9 @@ document.addEventListener('DOMContentLoaded', () => {
   tooltipTriggerList.forEach(el => new bootstrap.Tooltip(el));
 });
 
+// Timestamp (seconds) up to which PBs/metrics should be computed. null means no filter (use all solves).
+let filterTimestamp = null;
+
 function computeBestAverage(arr, n) {
   if (arr.length < n) return null;
   let best = Infinity;
@@ -146,6 +149,55 @@ document.getElementById('fileInput').addEventListener('change', e => {
           return pbHistory.reverse();
         }
 
+        // Modify PB history functions to accept an optional cutoff timestamp (seconds)
+        function getSinglePBHistoryUpTo(solves, upTo) {
+          const filtered = solves.filter(s => (s.date === null ? 0 : s.date) <= (upTo || Infinity));
+          if (filtered.length === 0) return [];
+          const sortedByDate = filtered.slice().sort((a, b) => a.date - b.date);
+          let currentPB = Infinity;
+          const pbHistory = [];
+          for (const s of sortedByDate) {
+            if (s.time < currentPB) {
+              currentPB = s.time;
+              pbHistory.push(s);
+            }
+          }
+          return pbHistory.reverse();
+        }
+
+        function getAveragePBHistoryUpTo(solves, n, upTo) {
+          const filtered = solves.filter(s => (s.date === null ? 0 : s.date) <= (upTo || Infinity));
+          if (filtered.length < n) return [];
+
+          const sortedByDate = filtered.slice().sort((a, b) => a.date - b.date);
+          let currentPB = Infinity;
+          const pbHistory = [];
+
+          for (let i = 0; i <= sortedByDate.length - n; i++) {
+            const window = sortedByDate.slice(i, i + n);
+            const times = window.map(s => s.time);
+            let avg;
+
+            if (n >= 5) {
+              const trimmed = [...times].sort((a, b) => a - b).slice(1, -1);
+              avg = trimmed.reduce((sum, val) => sum + val, 0) / trimmed.length;
+            } else {
+              avg = times.reduce((sum, val) => sum + val, 0) / times.length;
+            }
+
+            if (avg < currentPB) {
+              currentPB = avg;
+              pbHistory.push({
+                avg,
+                solves: window,
+                date: window[n - 1].date
+              });
+            }
+          }
+
+          return pbHistory.reverse();
+        }
+
         allEventData.push({
           event: eventName,
           solves: validSolves,
@@ -156,13 +208,14 @@ document.getElementById('fileInput').addEventListener('change', e => {
           ao12: bestAvg(12),
           ao50: bestAvg(50),
           ao100: bestAvg(100),
-          getPBHistory: function(metric) {
+          // getPBHistory(metric, upToSeconds)
+          getPBHistory: function(metric, upTo) {
             if (metric === 'single') {
-              return getSinglePBHistory(this.solves);
+              return getSinglePBHistoryUpTo(this.solves, upTo);
             }
             const nMap = { ao3: 3, ao5: 5, ao12: 12, ao50: 50, ao100: 100 };
             if (!nMap[metric]) return [];
-            return getAveragePBHistory(this.solves, nMap[metric]);
+            return getAveragePBHistoryUpTo(this.solves, nMap[metric], upTo);
           }
         });
       }
@@ -203,8 +256,10 @@ function renderTable() {
   `;
 
   allEventData.forEach((row, i) => {
+    // compute metrics up to the current filterTimestamp (if any)
+    const metrics = computeMetricsForEvent(row, filterTimestamp);
     const cells = ['single', 'ao3', 'ao5', 'ao12', 'ao50', 'ao100'].map(metric => {
-      const val = row[metric];
+      const val = metrics[metric];
       const display = formatTime(val);
       const isClickable = val !== null;
       return `<td
@@ -231,14 +286,14 @@ function renderTable() {
   // PB cell click handler — ignore Shift+Click
   document.querySelectorAll('.clickable-pb').forEach(cell => {
     cell.addEventListener('click', (e) => {
-      if (e.metaKey) return;
+      if (e.shiftKey) return;
 
       const eventIndex = parseInt(cell.dataset.eventIndex, 10);
       const metric = cell.dataset.metric;
       const eventData = allEventData[eventIndex];
       if (!eventData) return;
 
-      const pbs = eventData.getPBHistory(metric);
+      const pbs = eventData.getPBHistory(metric, filterTimestamp);
 
       if (!pbs.length) {
         modalBody.innerHTML = `<p>No past PBs found for ${metric.toUpperCase()}.</p>`;
@@ -259,10 +314,10 @@ function renderTable() {
     });
   });
 
-  // Command-click row to delete without opening modal
+  // Shift-click row to delete without opening modal
   document.querySelectorAll('tbody tr').forEach((row, i) => {
     row.addEventListener('click', (e) => {
-      if (e.metaKey) {
+      if (e.shiftKey) {
         allEventData.splice(i, 1);
         renderTable();
         e.stopPropagation();
@@ -271,3 +326,61 @@ function renderTable() {
     });
   });
 }
+
+// Compute best single/averages for an event up to optional cutoff timestamp (seconds)
+function computeMetricsForEvent(eventData, upTo) {
+  const filteredSolves = eventData.solves.filter(s => (s.date === null ? 0 : s.date) <= (upTo || Infinity));
+  const times = filteredSolves.map(s => s.time);
+
+  function bestAvgTimes(arr, n) {
+    if (arr.length < n) return null;
+    let best = Infinity;
+    for (let i = 0; i <= arr.length - n; i++) {
+      const slice = arr.slice(i, i + n);
+      let avg;
+      if (n >= 5) {
+        const sorted = [...slice].sort((a, b) => a - b).slice(1, -1);
+        avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+      } else {
+        avg = slice.reduce((a, b) => a + b, 0) / slice.length;
+      }
+      if (avg < best) best = avg;
+    }
+    return best;
+  }
+
+  return {
+    single: times.length ? Math.min(...times) : null,
+    ao3: bestAvgTimes(times, 3),
+    ao5: bestAvgTimes(times, 5),
+    ao12: bestAvgTimes(times, 12),
+    ao50: bestAvgTimes(times, 50),
+    ao100: bestAvgTimes(times, 100)
+  };
+}
+
+// Wire filter buttons
+document.addEventListener('DOMContentLoaded', () => {
+  const applyBtn = document.getElementById('applyFilterBtn');
+  const clearBtn = document.getElementById('clearFilterBtn');
+  const dateInput = document.getElementById('filterDate');
+
+  if (applyBtn) {
+    applyBtn.addEventListener('click', () => {
+      const v = dateInput.value; // YYYY-MM-DD
+      if (!v) return;
+      // set to end of day in local time
+      const dt = new Date(v + 'T23:59:59');
+      filterTimestamp = Math.floor(dt.getTime() / 1000);
+      renderTable();
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      filterTimestamp = null;
+      if (dateInput) dateInput.value = '';
+      renderTable();
+    });
+  }
+});
